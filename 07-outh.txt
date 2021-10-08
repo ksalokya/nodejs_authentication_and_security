@@ -1,0 +1,163 @@
+//Dotenv is a zero-dependency module -- add .env file in root dir
+//ADD ENV FILE WITH ID and Secret
+require('dotenv').config()
+const express = require("express");
+const bodyParser = require("body-parser");
+const ejs = require("ejs");
+const mongoose = require("mongoose");
+
+//-------------add this package for passport---------------------
+// npm i passport passport-local passport-local-mongoose express-session
+
+const session = require("express-session")
+const passport = require("passport")
+const passportLocalMongoose = require("passport-local-mongoose")
+
+//npm install passport-google-oauth20***
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
+
+//npm install mongoose-findorcreate
+const findOrCreate = require('mongoose-findorcreate')
+
+
+const app = express();
+app.set('view engine', 'ejs');
+app.use(bodyParser.urlencoded({extended: true}));
+
+
+//------------ ADD THIS PART - express session (put this to ENV)------------------
+app.use(session({
+  secret: 'keyboard',
+  resave: false,
+  saveUninitialized: true,
+}));
+
+
+//passportjs - config
+app.use(passport.initialize());
+app.use(passport.session());
+
+
+
+mongoose.connect("mongodb://localhost:27017/userDB", {useNewUrlParser: true,useUnifiedTopology: true,useCreateIndex:true})  //changes
+
+const userSchema = new mongoose.Schema( {   // add new method
+  email : String,
+  password : String,
+  googleId : String                         // add new field
+});
+
+
+//------------ ADD THIS PART - passport-local-mongoose ------------------
+userSchema.plugin(passportLocalMongoose);
+
+//------------ ADD THIS PART
+userSchema.plugin(findOrCreate);
+
+const User = new mongoose.model("User",userSchema);
+
+//------------ ADD THIS PART - passport-local-mongoose ------------------
+// CHANGE: use pasport method for serialize
+passport.use(User.createStrategy());
+
+passport.serializeUser(function(user, done) {
+  done(null, user.id);
+});
+
+passport.deserializeUser(function(id, done) {
+  User.findById(id, function(err, user) {
+    done(err, user);
+  });
+});
+
+//GoogleStrategy
+passport.use(new GoogleStrategy({
+    clientID: process.env.CLIENT_ID,                                  //change accordingly
+    clientSecret: process.env.CLIENT_SECRET,                          //change accordingly
+    callbackURL: "http://localhost:3000/auth/google/secrets",         //change accordingly
+    userProfileURL: "https://www.googleapis.com/oauth2/v3/userinfo"    
+  },
+  function(accessToken, refreshToken, profile, cb) {
+    console.log(profile);
+    User.findOrCreate({ googleId: profile.id }, function (err, user) {
+      return cb(err, user);
+    });
+  }
+));
+
+
+app.get("/", (req, res) => {
+  res.render("home");
+})
+
+//-----------------------add this route-----------------------
+app.get("/auth/google",passport.authenticate("google",{ scope:["profile"] }));
+
+app.get("/auth/google/secrets",
+  passport.authenticate("google", { failureRedirect: "/login" }),
+  function(req, res) {
+    // Successful authentication, redirect home.
+    res.redirect('/secrets');
+  });
+
+
+app.get("/register", (req, res) => {
+  res.render("register");
+})
+
+app.get("/login", (req, res) => {
+  res.render("login");
+})
+
+
+//--------------------CHANGES----------------------
+app.get("/secrets",(req,res)=>{
+  //passport js
+  if(req.isAuthenticated()){
+    res.render("secrets");
+  }else{
+    res.redirect("/login");
+  }
+})
+
+app.post("/register", (req, res) => {
+  //passport-local-mongoose
+  User.register({username: req.body.username},req.body.password,(err, user)=>{
+    if (err) {
+      console.log(err);
+      res.redirect("/register");
+    }else {
+      passport.authenticate("local")(req,res,()=>{
+        res.redirect("/secrets")
+      });
+    }
+  })
+})
+
+//--------------------CHANGES----------------------
+app.post("/login",(req, res)=>{
+  const user = new User({
+    username : req.body.username,
+    password : req.body.password
+  });
+  //passport js
+  req.login(user,(err)=>{
+    if (err) {
+      console.log(err);
+    }else {
+      passport.authenticate("local")(req,res,()=>{
+        res.redirect("/secrets")
+      });
+    }
+  })
+})
+
+app.get("/logout",(req,res)=>{
+  //passport js
+  req.logout();
+  res.redirect("/");
+})
+
+app.listen(3000, function() {
+  console.log("Server started on port 3000");
+});
